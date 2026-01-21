@@ -1,0 +1,138 @@
+
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Ultima Standalone P2P</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>
+        :root { --bg-main: #0b0f19; --bg-accent: #161d2e; --text-main: #f8fafc; --text-dim: #94a3b8; --primary: #3b82f6; --border: #2d3748; --radius: 1rem; }
+        body { background-color: var(--bg-main); color: var(--text-main); font-family: sans-serif; margin: 0; }
+        .rounded-ultima { border-radius: var(--radius); }
+        .modal-blur { backdrop-filter: blur(12px); background: rgba(0, 0, 0, 0.4); }
+        .custom-scrollbar::-webkit-scrollbar { width: 3px; }
+        .shadow-ultima { box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4); }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+    <script type="text/babel">
+        const { useState, useEffect, useRef, useCallback } = React;
+
+        const PASSPHRASE_SALT = 'UltimaP2PSalt_2025';
+        const IV_LENGTH = 16;
+        const DEFAULT_SDP_KEY = "Ultima_Internal_v1_Secret";
+
+        const CryptoUtils = {
+            async getKey(pass) {
+                const enc = new TextEncoder();
+                const mat = await crypto.subtle.importKey("raw", enc.encode(pass), {name:"PBKDF2"}, false, ["deriveKey"]);
+                return crypto.subtle.deriveKey({name:"PBKDF2", salt:enc.encode(PASSPHRASE_SALT), iterations:100000, hash:"SHA-256"}, mat, {name:"AES-GCM", length:256}, true, ["encrypt","decrypt"]);
+            },
+            async encrypt(text, pass) {
+                const key = await this.getKey(pass);
+                const iv = crypto.getRandomValues(new Uint8Array(IV_LENGTH));
+                const enc = await crypto.subtle.encrypt({name:"AES-GCM", iv}, key, new TextEncoder().encode(text));
+                const res = new Uint8Array(iv.length + enc.byteLength);
+                res.set(iv, 0); res.set(new Uint8Array(enc), iv.length);
+                return btoa(String.fromCharCode(...res));
+            },
+            async decrypt(b64, pass) {
+                const key = await this.getKey(pass);
+                const buf = new Uint8Array(atob(b64).split('').map(c => c.charCodeAt(0)));
+                const iv = buf.slice(0, IV_LENGTH);
+                const data = buf.slice(IV_LENGTH);
+                const dec = await crypto.subtle.decrypt({name:"AES-GCM", iv}, key, data);
+                return new TextDecoder().decode(dec);
+            }
+        };
+
+        const App = () => {
+            const [state, setState] = useState('IDLE');
+            const [msgs, setMsgs] = useState([]);
+            const [input, setInput] = useState('');
+            const [local, setLocal] = useState('');
+            const [remote, setRemote] = useState('');
+            const pc = useRef(null);
+            const dc = useRef(null);
+
+            const init = async (initr) => {
+                const p = new RTCPeerConnection({iceServers:[{urls:'stun:stun.l.google.com:19302'}]});
+                pc.current = p;
+                p.onicecandidate = async e => {
+                    if(!e.candidate) {
+                        const sdp = await CryptoUtils.encrypt(JSON.stringify(p.localDescription), DEFAULT_SDP_KEY);
+                        setLocal(sdp);
+                    }
+                };
+                if(initr) {
+                    const d = p.createDataChannel('chat');
+                    setup(d);
+                    const offer = await p.createOffer();
+                    await p.setLocalDescription(offer);
+                } else {
+                    p.ondatachannel = e => setup(e.channel);
+                }
+            };
+
+            const setup = d => {
+                d.onopen = () => setState('CONNECTED');
+                d.onmessage = e => setMsgs(prev => [...prev, {type:'received', text:e.data}]);
+                dc.current = d;
+            };
+
+            const connect = async () => {
+                const dec = JSON.parse(await CryptoUtils.decrypt(remote, DEFAULT_SDP_KEY));
+                await pc.current.setRemoteDescription(dec);
+                if(dec.type === 'offer') {
+                    const ans = await pc.current.createAnswer();
+                    await pc.setLocalDescription(ans);
+                }
+            };
+
+            const send = () => {
+                dc.current.send(input);
+                setMsgs(prev => [...prev, {type:'sent', text:input}]);
+                setInput('');
+            };
+
+            return (
+                <div className="flex flex-col h-screen max-w-lg mx-auto bg-[#0b0f19]">
+                    <div className="p-4 bg-[#161d2e] border-b border-[#2d3748] flex justify-between items-center">
+                        <h1 className="font-bold">Ultima Standalone 🔒</h1>
+                        <span className={`text-[10px] px-2 py-1 rounded-full ${state === 'CONNECTED' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-500/20 text-slate-400'}`}>{state}</span>
+                    </div>
+                    <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar">
+                        {msgs.map((m, i) => (
+                            <div key={i} className={`flex ${m.type === 'sent' ? 'justify-end' : 'justify-start'}`}>
+                                <div className={`p-3 rounded-lg max-w-[80%] ${m.type === 'sent' ? 'bg-blue-600' : 'bg-[#1e293b] border border-[#2d3748]'}`}>{m.text}</div>
+                            </div>
+                        ))}
+                    </div>
+                    {state === 'CONNECTED' ? (
+                        <div className="p-4 bg-[#161d2e] flex gap-2">
+                            <input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && send()} className="flex-1 bg-[#0b0f19] border border-[#2d3748] rounded-lg px-4 py-2 outline-none" />
+                            <button onClick={send} className="px-4 py-2 bg-blue-600 rounded-lg">🚀</button>
+                        </div>
+                    ) : (
+                        <div className="p-6 bg-[#161d2e] border-t border-[#2d3748] space-y-4">
+                            <div className="grid grid-cols-2 gap-3">
+                                <button onClick={() => {setState('HOST'); init(true);}} className="bg-blue-600 py-3 rounded-lg font-bold">Host</button>
+                                <button onClick={() => {setState('JOIN'); init(false);}} className="bg-transparent border border-[#2d3748] py-3 rounded-lg font-bold">Join</button>
+                            </div>
+                            {local && <div className="space-y-2"><p className="text-[10px] text-slate-400 uppercase font-bold">Ваш код (передайте партнеру):</p><textarea readOnly value={local} className="w-full h-20 bg-black/30 p-2 text-[9px] font-mono border border-[#2d3748] rounded" /></div>}
+                            <div className="space-y-2"><p className="text-[10px] text-slate-400 uppercase font-bold">Вставте код партнера:</p><textarea value={remote} onChange={e => setRemote(e.target.value)} className="w-full h-20 bg-black/30 p-2 text-[9px] font-mono border border-[#2d3748] rounded" /></div>
+                            <button onClick={connect} className="w-full bg-emerald-600 py-3 rounded-lg font-bold">З'єднати</button>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+        ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+    </script>
+</body>
+</html>

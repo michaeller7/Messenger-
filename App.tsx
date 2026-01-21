@@ -1,11 +1,44 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { ConnectionState, Message, CryptoConfig, Theme, Language, EncLevel } from './types';
-import { CryptoUtils } from './services/cryptoUtils';
-import { translations } from './translations';
+
+// --- Types & Constants ---
+export enum ConnectionState {
+  IDLE = 'IDLE',
+  GENERATING = 'GENERATING',
+  OFFERING = 'OFFERING',
+  ANSWERING = 'ANSWERING',
+  CONNECTED = 'CONNECTED',
+  DISCONNECTED = 'DISCONNECTED',
+  FAILED = 'FAILED'
+}
+
+export type Theme = 'dark' | 'light' | 'modern';
+export type Language = 'uk' | 'en';
+export type EncLevel = 'open' | 'standard' | 'personal';
+
+export interface Message {
+  id: string;
+  type: 'sent' | 'received' | 'system';
+  content: string;
+  timestamp: number;
+  file?: {
+    name: string;
+    mime: string;
+    url: string;
+  };
+}
+
+export interface CryptoConfig {
+  encLevel: EncLevel;
+  passphrase?: string;
+  useMic: boolean;
+}
 
 const CHUNK_SIZE = 16384;
 const DEFAULT_SDP_KEY = "Ultima_Internal_v1_Secret";
+const PASSPHRASE_SALT = 'UltimaP2PSalt_2025';
+const IV_LENGTH = 16;
+
 const RTC_CONFIG: RTCConfiguration = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
@@ -13,6 +46,81 @@ const RTC_CONFIG: RTCConfiguration = {
   ]
 };
 
+// --- Crypto Utilities ---
+const CryptoUtils = {
+  async getKeyFromPassphrase(passphrase: string): Promise<CryptoKey> {
+    const enc = new TextEncoder();
+    const keyMaterial = await window.crypto.subtle.importKey(
+      "raw", enc.encode(passphrase), { name: "PBKDF2" }, false, ["deriveKey"]
+    );
+    return window.crypto.subtle.deriveKey(
+      { name: "PBKDF2", salt: enc.encode(PASSPHRASE_SALT), iterations: 100000, hash: "SHA-256" },
+      keyMaterial, { name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]
+    );
+  },
+
+  async encrypt(text: string, passphrase: string): Promise<string> {
+    const key = await this.getKeyFromPassphrase(passphrase);
+    const iv = window.crypto.getRandomValues(new Uint8Array(IV_LENGTH));
+    const enc = new TextEncoder();
+    const encrypted = await window.crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, enc.encode(text));
+    const combined = new Uint8Array(iv.length + encrypted.byteLength);
+    combined.set(iv, 0);
+    combined.set(new Uint8Array(encrypted), iv.length);
+    return btoa(String.fromCharCode(...Array.from(combined)));
+  },
+
+  async decrypt(encryptedBase64: string, passphrase: string): Promise<string> {
+    const key = await this.getKeyFromPassphrase(passphrase);
+    const combined = new Uint8Array(atob(encryptedBase64).split('').map(c => c.charCodeAt(0)));
+    const iv = combined.slice(0, IV_LENGTH);
+    const encrypted = combined.slice(IV_LENGTH);
+    const decrypted = await window.crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, encrypted);
+    return new TextDecoder().decode(decrypted);
+  },
+
+  generateRandomId(): string {
+    return Math.random().toString(36).substring(2, 11);
+  }
+};
+
+// --- Translations ---
+const translations = {
+  uk: {
+    title: "Secure P2P 🔒", subtitle: "НАВІТЬ СЕРВЕРИ НЕ БАЧАТЬ ВАШ ЧАТ", secure: "ЗАХИЩЕНО", online: "У мережі", offline: "Офлайн", typing: "друкує",
+    host: "Створити код (Host)", join: "Приєднатися (Join)", setupTitle: "Налаштування безпеки", close: "Закрити", voiceToggle: "Голосовий зв'язок",
+    voiceHint: "⚠️ Для роботи обидва пристрої повинні увімкнути цей перемикач перед з'єднанням.", placeholder: "Ваше повідомлення...",
+    status: "Статус", protocol: "Протокол", cipher: "Шифр", ice: "ICE Транспорт", audio: "Аудіо канал", active: "Активний", inactive: "Неактивний",
+    waiting: "Очікування...", connected: "З'єднано", copy: "Копіювати", share: "Поділитись", shareMsg: "Мій секретний код:", 
+    howToUseTitle: "Як користуватися?", howToUseSteps: ["1. Host -> Код -> Партнеру", "2. Join -> Вставити -> Відповідь", "3. Вставити відповідь"],
+    lang: "Мова", theme: "Тема", encLevelLabel: "Захист SDP:", encStandard: "Стандарт", encPersonal: "Пароль", encOpen: "Відкрито", 
+    passPlaceholder: "Пароль...", securityData: "Безпека", confirmEnd: { title: "Завершити?", desc: "Авто-закриття через {time} сек.", yes: "Так", no: "Ні" },
+    stages: { gen: "Генерація...", paste: "Вставте код", process: "Обробити", sendBack: "Ваш код", reply: "Вставте відповідь", yourReply: "Ваша відповідь" },
+    infoFooterTitle: "Чому це безпечно?",
+    techDetails: {
+        p2p: "Peer-to-Peer. Ключі шифрування не покидають пристрій.",
+        data: "DTLS (AES-256)", voice: "SRTP", modes: "Режими:", mode1: "Стандарт", mode2: "Особистий", mode3: "Відкритий"
+    }
+  },
+  en: {
+    title: "Secure P2P 🔒", subtitle: "DIRECT END-TO-END ENCRYPTION", secure: "SECURE", online: "Online", offline: "Offline", typing: "typing",
+    host: "Host Session", join: "Join Session", setupTitle: "Security Settings", close: "Close", voiceToggle: "Voice Call",
+    voiceHint: "⚠️ Both must enable this before connecting.", placeholder: "Type a message...",
+    status: "Status", protocol: "Protocol", cipher: "Cipher", ice: "ICE Transport", audio: "Audio Channel", active: "Active", inactive: "Inactive",
+    waiting: "Waiting...", connected: "Connected", copy: "Copy", share: "Share", shareMsg: "My P2P code:",
+    howToUseTitle: "How to use?", howToUseSteps: ["1. Host -> Code -> Peer", "2. Join -> Paste -> Reply", "3. Finish"],
+    lang: "Lang", theme: "Theme", encLevelLabel: "SDP Protection:", encStandard: "Standard", encPersonal: "Passphrase", encOpen: "Open",
+    passPlaceholder: "Passphrase...", securityData: "Security", confirmEnd: { title: "End chat?", desc: "Auto-closing in {time} sec.", yes: "Yes", no: "No" },
+    stages: { gen: "Generating...", paste: "Paste invite", process: "Process", sendBack: "Your code", reply: "Paste reply", yourReply: "Your reply" },
+    infoFooterTitle: "Why is it secure?",
+    techDetails: {
+        p2p: "Peer-to-Peer logic. Server never sees your keys.",
+        data: "DTLS (AES-256)", voice: "SRTP", modes: "Modes:", mode1: "Standard", mode2: "Personal", mode3: "Open"
+    }
+  }
+};
+
+// --- App Component ---
 const App: React.FC = () => {
   const [lang, setLang] = useState<Language>('uk');
   const [theme, setTheme] = useState<Theme>('dark');
@@ -287,7 +395,7 @@ const App: React.FC = () => {
       <header className="bg-[var(--bg-accent)] border-b border-[var(--border)] p-4 flex justify-between items-center z-20 shadow-ultima sticky top-0">
         <div className="flex items-center gap-3 cursor-pointer" onClick={() => setShowSecurity(true)}>
           <div className="relative">
-            <div className={`w-3 h-3 rounded-full absolute -bottom-0.5 -right-0.5 border-2 border-[var(--bg-accent)] ${connState === ConnectionState.CONNECTED ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]' : 'bg-slate-500'}`} />
+            <div className={`w-3 h-3 rounded-full absolute -bottom-0.5 -right-0.5 border-2 border-[var(--bg-accent)] ${connState === ConnectionState.CONNECTED ? 'bg-emerald-500' : 'bg-slate-500'}`} />
             <div className="w-10 h-10 bg-[var(--bg-main)] rounded-ultima border border-[var(--border)] flex items-center justify-center text-xl shadow-inner">🔒</div>
           </div>
           <div className="flex flex-col overflow-hidden">
@@ -341,7 +449,7 @@ const App: React.FC = () => {
                     {m.file.mime.startsWith('image/') ? <img src={m.file.url} className="img-adaptive" alt="" /> : <a href={m.file.url} download={m.file.name} className="flex items-center gap-2 p-3 bg-black/5 font-bold text-xs truncate max-w-full block">📎 {m.file.name}</a>}
                   </div>
                 )}
-                <div className="text-[14px] leading-relaxed break-all font-medium">{m.content}</div>
+                <div className="text-[14px] font-medium break-all">{m.content}</div>
                 <div className="text-[9px] mt-1.5 opacity-60 font-black tracking-tighter uppercase text-right">{new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
               </div>
             )}
@@ -359,7 +467,7 @@ const App: React.FC = () => {
           </label>
           <input type="text" className="flex-1 bg-transparent px-2 py-2 outline-none text-[var(--text-main)] placeholder-[var(--text-dim)] font-medium text-sm" placeholder={t.placeholder} value={inputValue} onChange={(e) => handleInputChange(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && sendMessage()} disabled={connState !== ConnectionState.CONNECTED} />
           <button className="p-3 bg-[var(--primary)] text-white rounded-ultima disabled:opacity-30 shadow-ultima active:scale-90 transition-all" onClick={sendMessage} disabled={connState !== ConnectionState.CONNECTED}>
-            <svg className="w-4 h-4 rotate-90" fill="currentColor" viewBox="0 0 20 20"><path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z" /></svg>
+            🚀
           </button>
         </div>
       </footer>
@@ -386,16 +494,9 @@ const App: React.FC = () => {
                 </div>
               </div>
               {config.encLevel === 'personal' && <input type="password" placeholder={t.passPlaceholder} className="w-full bg-[var(--bg-main)] border border-[var(--border)] rounded-ultima px-4 py-3.5 text-emerald-400 font-mono text-sm shadow-inner outline-none focus:ring-2 focus:ring-[var(--primary)]" value={config.passphrase} onChange={(e) => setConfig(p => ({...p, passphrase: e.target.value}))} />}
-              <div className="space-y-3">
-                <div className="flex items-center justify-between p-3.5 bg-[var(--bg-main)] rounded-ultima border border-[var(--border)] shadow-ultima">
-                  <div className="flex items-center gap-3"><span className="text-lg">🎙️</span><span className="text-sm font-bold text-[var(--text-main)]">{t.voiceToggle}</span></div>
-                  <button onClick={() => setConfig(p => ({...p, useMic: !p.useMic}))} className={`w-12 h-6 rounded-full transition-all relative ${config.useMic ? 'bg-blue-600' : 'bg-slate-700'} shadow-inner`}><div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-transform ${config.useMic ? 'translate-x-7' : 'translate-x-1'} shadow-ultima`} /></button>
-                </div>
-                {config.useMic && <p className="text-[10px] text-[var(--text-dim)] font-medium leading-relaxed px-1 animate-in fade-in slide-in-from-top-1">{t.voiceHint}</p>}
-              </div>
               <div className="grid grid-cols-2 gap-3 pt-2">
-                <button onClick={async () => { setConnState(ConnectionState.GENERATING); await initRtc(true); }} className={`font-bold py-4 rounded-ultima transition-all text-sm shadow-ultima hover:brightness-110 active:scale-95 ${isHostMode ? 'bg-[var(--primary)] text-white shadow-lg' : 'bg-transparent border border-[var(--border)] text-[var(--text-main)]'}`}>{t.host}</button>
-                <button onClick={() => { setConnState(ConnectionState.ANSWERING); setLocalSdp(''); setRemoteInput(''); }} className={`font-bold py-4 rounded-ultima transition-all text-sm shadow-ultima hover:brightness-110 active:scale-95 ${isJoinMode ? 'bg-[var(--primary)] text-white shadow-lg' : 'bg-transparent border border-[var(--border)] text-[var(--text-main)]'}`}>{t.join}</button>
+                <button onClick={async () => { setConnState(ConnectionState.GENERATING); await initRtc(true); }} className={`font-bold py-4 rounded-ultima transition-all text-sm shadow-ultima hover:brightness-110 active:scale-95 ${isHostMode ? 'bg-[var(--primary)] text-white' : 'bg-transparent border border-[var(--border)] text-[var(--text-main)]'}`}>{t.host}</button>
+                <button onClick={() => { setConnState(ConnectionState.ANSWERING); setLocalSdp(''); setRemoteInput(''); }} className={`font-bold py-4 rounded-ultima transition-all text-sm shadow-ultima hover:brightness-110 active:scale-95 ${isJoinMode ? 'bg-[var(--primary)] text-white' : 'bg-transparent border border-[var(--border)] text-[var(--text-main)]'}`}>{t.join}</button>
               </div>
               {(isHostMode || isJoinMode) && (
                 <div className="space-y-4 pt-5 border-t border-[var(--border)] animate-in slide-in-from-bottom-2 duration-300">
@@ -426,28 +527,6 @@ const App: React.FC = () => {
                   )}
                 </div>
               )}
-              <div className="pt-2 border-t border-[var(--border)]">
-                <button onClick={() => setShowInfo(!showInfo)} className="w-full py-3 px-4 flex items-center justify-between text-[var(--text-dim)] bg-[var(--bg-main)] rounded-ultima border border-[var(--border)] hover:text-[var(--text-main)] transition-colors shadow-ultima group">
-                  <span className="text-[10px] font-black uppercase tracking-widest">{t.howToUseTitle} / {t.infoFooterTitle}</span>
-                  <svg className={`w-4 h-4 transition-transform duration-300 ${showInfo ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
-                </button>
-                {showInfo && (
-                  <div className="mt-4 space-y-6 animate-in slide-in-from-top-2 duration-300 overflow-hidden">
-                    <div className="space-y-2">
-                      <h3 className="text-[10px] font-black uppercase tracking-widest text-[var(--primary)] pl-1">{t.howToUseTitle}</h3>
-                      <div className="text-[11px] space-y-1.5 opacity-80 leading-relaxed text-[var(--text-main)] bg-[var(--bg-main)]/50 p-3 rounded-lg border border-[var(--border)] shadow-inner">{t.howToUseSteps.map((step, i) => <p key={i}>{step}</p>)}</div>
-                    </div>
-                    <div className="space-y-2">
-                      <h3 className="text-[10px] font-black uppercase tracking-widest text-[var(--primary)] pl-1">{t.infoFooterTitle}</h3>
-                      <div className="text-[11px] space-y-2.5 opacity-80 leading-relaxed text-[var(--text-main)] bg-[var(--bg-main)] p-4 rounded-ultima border border-[var(--border)] shadow-ultima">
-                        <p className="font-medium text-[var(--text-dim)] italic">{t.techDetails.p2p}</p>
-                        <p>{t.techDetails.data}</p><p>{t.techDetails.voice}</p>
-                        <div className="pt-1"><p className="font-bold mb-1.5 text-[var(--primary)] uppercase text-[9px] tracking-wider">{t.techDetails.modes}</p><div className="space-y-1 pl-1"><p>{t.techDetails.mode1}</p><p>{t.techDetails.mode2}</p><p>{t.techDetails.mode3}</p></div></div>
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
             </div>
           </div>
         </div>
@@ -458,25 +537,6 @@ const App: React.FC = () => {
             <div className="w-16 h-16 bg-red-500/10 text-red-500 rounded-full flex items-center justify-center mx-auto mb-4 border border-red-500/20"><span className="text-2xl font-bold">{endTimer}</span></div>
             <h2 className="text-lg font-bold text-[var(--text-main)] mb-2">{t.confirmEnd.title}</h2><p className="text-xs text-[var(--text-dim)] mb-8 leading-relaxed">{t.confirmEnd.desc.replace('{time}', endTimer.toString())}</p>
             <div className="flex flex-col gap-3"><button onClick={() => closeSession(false)} className="w-full py-3.5 bg-red-500 text-white rounded-ultima font-bold text-sm shadow-ultima hover:brightness-110 active:scale-95 transition-all">{t.confirmEnd.yes}</button><button onClick={() => setShowEndConfirmation(false)} className="w-full py-3.5 bg-[var(--bg-main)] border border-[var(--border)] text-[var(--text-main)] rounded-ultima font-bold text-sm hover:bg-[var(--bg-accent)] active:scale-95 transition-all shadow-ultima">{t.confirmEnd.no}</button></div>
-          </div>
-        </div>
-      )}
-      {showSecurity && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 modal-blur" onClick={() => setShowSecurity(false)}>
-          <div className="bg-[var(--bg-accent)] border border-[var(--border)] w-full max-w-sm rounded-ultima p-8 shadow-ultima-lg relative animate-in fade-in zoom-in duration-200" onClick={e => e.stopPropagation()}>
-            <button onClick={() => setShowSecurity(false)} className="absolute right-6 top-6 text-slate-500 hover:text-white transition-colors">✕</button>
-            <h2 className="text-xl font-bold mb-8 text-[var(--text-main)] tracking-tight">{t.securityData}</h2>
-            <div className="space-y-5">
-              <div className="flex justify-between border-b border-[var(--border)] pb-3 text-sm items-center"><span className="text-[var(--text-dim)] font-medium">{t.status}:</span><span className="text-emerald-400 font-bold">{connState === ConnectionState.CONNECTED ? t.connected : t.waiting}</span></div>
-              <div className="flex justify-between border-b border-[var(--border)] pb-3 text-sm items-center"><span className="text-[var(--text-dim)] font-medium">{t.protocol}:</span><span className="text-emerald-400 font-bold">DTLS / SRTP</span></div>
-              <div className="flex flex-col border-b border-[var(--border)] pb-3">
-                <div className="flex justify-between items-center mb-1.5"><span className="text-[var(--text-dim)] font-medium text-sm">{t.cipher}:</span><button onClick={() => setShowFullCipher(!showFullCipher)} className="p-1 text-[var(--text-dim)] hover:text-[var(--primary)] transition-colors"><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">{showFullCipher ? <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97(9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l18 18" /> : <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0zM2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />}</svg></button></div>
-                <div className="cursor-pointer select-none text-right" onClick={() => setShowFullCipher(!showFullCipher)}><span className={`text-emerald-400 font-mono text-[11px] leading-relaxed font-bold uppercase block transition-all ${showFullCipher ? 'break-all whitespace-normal' : ''}`}>{showFullCipher ? "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256" : "AES-128 / SHA-256"}</span></div>
-              </div>
-              <div className="flex justify-between border-b border-[var(--border)] pb-3 text-sm items-center"><span className="text-[var(--text-dim)] font-medium">{t.ice}:</span><span className="text-emerald-400 font-bold">UDP (Host/Stun)</span></div>
-              <div className="flex justify-between border-b border-[var(--border)] pb-3 text-sm items-center"><span className="text-[var(--text-dim)] font-medium">{t.audio}:</span><span className={config.useMic ? "text-emerald-400 font-bold" : "text-red-400 font-bold"}>{config.useMic ? t.active : t.inactive}</span></div>
-              <div className="pt-6"><p className="text-[11px] text-[var(--text-dim)] text-center leading-relaxed font-medium italic opacity-70">{t.techDetails.p2p}</p></div>
-            </div>
           </div>
         </div>
       )}
