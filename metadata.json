@@ -1,0 +1,8 @@
+{
+  "name": "Ultima Secure P2P",
+  "description": "A high-security, peer-to-peer encrypted messenger that works directly in your browser or as a Telegram Mini App.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
