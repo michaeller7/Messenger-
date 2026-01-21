@@ -341,7 +341,6 @@ const App: React.FC = () => {
                     {m.file.mime.startsWith('image/') ? <img src={m.file.url} className="img-adaptive" alt="" /> : <a href={m.file.url} download={m.file.name} className="flex items-center gap-2 p-3 bg-black/5 font-bold text-xs truncate max-w-full block">📎 {m.file.name}</a>}
                   </div>
                 )}
-                {/* Fix: Added break-all to handle very long messages/keys and ensure adaptive layout */}
                 <div className="text-[14px] leading-relaxed break-all font-medium">{m.content}</div>
                 <div className="text-[9px] mt-1.5 opacity-60 font-black tracking-tighter uppercase text-right">{new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
               </div>
@@ -395,10 +394,10 @@ const App: React.FC = () => {
                 {config.useMic && <p className="text-[10px] text-[var(--text-dim)] font-medium leading-relaxed px-1 animate-in fade-in slide-in-from-top-1">{t.voiceHint}</p>}
               </div>
               <div className="grid grid-cols-2 gap-3 pt-2">
-                <button onClick={async () => { setConnState(ConnectionState.GENERATING); await initRtc(true); }} className={`font-bold py-4 rounded-ultima transition-all text-sm shadow-ultima hover:brightness-110 active:scale-95 ${isHostMode && connState !== ConnectionState.IDLE ? 'bg-[var(--primary)] text-white shadow-lg' : 'bg-transparent border border-[var(--border)] text-[var(--text-main)]'}`}>{t.host}</button>
+                <button onClick={async () => { setConnState(ConnectionState.GENERATING); await initRtc(true); }} className={`font-bold py-4 rounded-ultima transition-all text-sm shadow-ultima hover:brightness-110 active:scale-95 ${isHostMode ? 'bg-[var(--primary)] text-white shadow-lg' : 'bg-transparent border border-[var(--border)] text-[var(--text-main)]'}`}>{t.host}</button>
                 <button onClick={() => { setConnState(ConnectionState.ANSWERING); setLocalSdp(''); setRemoteInput(''); }} className={`font-bold py-4 rounded-ultima transition-all text-sm shadow-ultima hover:brightness-110 active:scale-95 ${isJoinMode ? 'bg-[var(--primary)] text-white shadow-lg' : 'bg-transparent border border-[var(--border)] text-[var(--text-main)]'}`}>{t.join}</button>
               </div>
-              {((isHostMode && connState !== ConnectionState.IDLE) || isJoinMode) && (
+              {(isHostMode || isJoinMode) && (
                 <div className="space-y-4 pt-5 border-t border-[var(--border)] animate-in slide-in-from-bottom-2 duration-300">
                   {isHostMode && (
                     <>
@@ -469,7 +468,6 @@ const App: React.FC = () => {
             <h2 className="text-xl font-bold mb-8 text-[var(--text-main)] tracking-tight">{t.securityData}</h2>
             <div className="space-y-5">
               <div className="flex justify-between border-b border-[var(--border)] pb-3 text-sm items-center"><span className="text-[var(--text-dim)] font-medium">{t.status}:</span><span className="text-emerald-400 font-bold">{connState === ConnectionState.CONNECTED ? t.connected : t.waiting}</span></div>
-              {/* Fix: Corrected typo border(--border) to border-[var(--border)] to match UI theme */}
               <div className="flex justify-between border-b border-[var(--border)] pb-3 text-sm items-center"><span className="text-[var(--text-dim)] font-medium">{t.protocol}:</span><span className="text-emerald-400 font-bold">DTLS / SRTP</span></div>
               <div className="flex flex-col border-b border-[var(--border)] pb-3">
                 <div className="flex justify-between items-center mb-1.5"><span className="text-[var(--text-dim)] font-medium text-sm">{t.cipher}:</span><button onClick={() => setShowFullCipher(!showFullCipher)} className="p-1 text-[var(--text-dim)] hover:text-[var(--primary)] transition-colors"><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">{showFullCipher ? <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97(9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l18 18" /> : <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0zM2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />}</svg></button></div>
